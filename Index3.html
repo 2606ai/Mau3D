@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Badge 3D — Shield M</title>
+<style>
+  html,body{height:100%;margin:0;background:#fff}
+  canvas{display:block}
+  .ui{
+    position:fixed;left:8px;top:8px;right:8px;z-index:10;
+    font:600 14px system-ui,Segoe UI,Roboto;display:flex;gap:8px;justify-content:center;pointer-events:none
+  }
+  .pill{pointer-events:auto;background:#fff;padding:8px 12px;border-radius:999px;
+        box-shadow:0 8px 28px rgba(0,0,0,.12);display:flex;gap:10px;align-items:center}
+  .pill input{width:95px}
+</style>
+</head>
+<body>
+<div class="ui">
+  <div class="pill">
+    <span>Kích thước (mm):</span>
+    <label>Rộng <input id="w" type="number" value="48" step="1"></label>
+    <label>Dày <input id="t" type="number" value="3.2" step="0.1"></label>
+    <label>Viền <input id="rim" type="number" value="0.9" step="0.1"></label>
+    <label>Khe giữa <input id="gap" type="number" value="0.7" step="0.1"></label>
+    <button id="apply">Áp dụng</button>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.164.1/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.164.1/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+let scene, camera, renderer, controls, group;
+init();
+buildBadge();
+
+function init(){
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xffffff);
+
+  camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 2000);
+  camera.position.set(0, 40, 120);
+
+  renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setPixelRatio(devicePixelRatio);
+  renderer.setSize(innerWidth, innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  // Ánh sáng sáng rõ
+  const hemi = new THREE.HemisphereLight(0xffffff, 0xdedede, 1.1);
+  scene.add(hemi);
+  const key = new THREE.DirectionalLight(0xffffff, 1.35);
+  key.position.set(60, 120, 80);
+  key.castShadow = false;
+  scene.add(key);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.6);
+  fill.position.set(-60, 80, -60);
+  scene.add(fill);
+
+  // Sàn mờ nhẹ để có cảm giác không gian
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(1000,1000),
+    new THREE.MeshStandardMaterial({color:0xf3f6fb, roughness:1})
+  );
+  ground.rotation.x = -Math.PI/2;
+  ground.position.y = -30;
+  scene.add(ground);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.06;
+  controls.minDistance = 40;
+  controls.maxDistance = 260;
+
+  addEventListener('resize', onResize);
+  renderer.setAnimationLoop(()=>{ controls.update(); renderer.render(scene,camera); });
+
+  document.getElementById('apply').onclick = ()=>{ buildBadge(); };
+}
+
+function onResize(){
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+}
+
+// ---------- Tạo texture gradient đỏ→đen cho men ----------
+function enamelGradientTexture(w=1024, h=1024){
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  const g = ctx.createLinearGradient(0,0,0,h);
+  g.addColorStop(0.0,'#c51616');  // đỏ trên
+  g.addColorStop(0.55,'#7a1010');
+  g.addColorStop(1.0,'#0e0e0e');  // đen dưới
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,w,h);
+  const tex = new THREE.CanvasTexture(c);
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy?.() || 1;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// --------- Xây huy hiệu ----------
+function buildBadge(){
+  const W  = parseFloat(document.getElementById('w').value);     // chiều ngang mm
+  const T  = parseFloat(document.getElementById('t').value);     // độ dày
+  const RIM= parseFloat(document.getElementById('rim').value);   // bề rộng viền
+  const GAP= parseFloat(document.getElementById('gap').value);   // khe giữa
+
+  if(group){ scene.remove(group); group.traverse(o=>o.geometry && o.geometry.dispose()); }
+  group = new THREE.Group(); scene.add(group);
+
+  // Vật liệu
+  const gold = new THREE.MeshPhysicalMaterial({
+    color:0xd4af37, metalness:1, roughness:0.22, clearcoat:0.7, clearcoatRoughness:0.2,
+    reflectivity:1
+  });
+  const baseMetal = new THREE.MeshStandardMaterial({color:0x151515, roughness:0.9, metalness:0.15});
+  const enamelMat = new THREE.MeshPhysicalMaterial({
+    map: enamelGradientTexture(), clearcoat:0.4, clearcoatRoughness:0.3, roughness:0.55, metalness:0.2
+  });
+  const grooveMat = new THREE.MeshStandardMaterial({color:0x070707, roughness:0.9, metalness:0.1});
+
+  // 1) Biên dạng khiên 2D — chỉnh lại cho sát ảnh hơn (vai bẻ góc, đáy nhọn)
+  const outer = shieldShape2D(W);
+  const inner = shieldShape2D(W - 2*RIM);
+
+  // 2) Thân nền tối
+  const body = new THREE.Mesh(new THREE.ExtrudeGeometry(outer, {depth:T, bevelEnabled:false}), baseMetal);
+  body.rotation.x = -Math.PI/2;
+  group.add(body);
+
+  // 3) Viền vàng (outer - inner)
+  const rimShape = shieldShape2D(W); rimShape.holes.push(inner);
+  const rim = new THREE.Mesh(new THREE.ExtrudeGeometry(rimShape, {depth:T, bevelEnabled:false}), gold);
+  rim.rotation.x = -Math.PI/2;
+  group.add(rim);
+
+  // 4) Lòng men (thấp hơn viền)
+  const enamelDepth = Math.min(0.9, T*0.38);
+  const enamelZ = T - enamelDepth + 0.02;
+  const enamelGeo = new THREE.ExtrudeGeometry(inner, {depth:enamelDepth, bevelEnabled:false});
+  const enamel = new THREE.Mesh(enamelGeo, enamelMat);
+  enamel.rotation.x = -Math.PI/2;
+  enamel.position.z = enamelZ;
+  group.add(enamel);
+
+  // 5) Khe giữa — một “rãnh” đen mảnh, chạy từ trên xuống
+  const groove = new THREE.Mesh(new THREE.BoxGeometry(GAP, W*1.35, Math.max(0.6,enamelDepth*0.8)), grooveMat);
+  groove.rotation.x = -Math.PI/2;
+  groove.position.z = enamelZ + enamelDepth/2;
+  group.add(groove);
+
+  // 6) Chữ M nổi (tạm thời bằng khối tham số; khi có SVG sẽ thay cho đúng biên dạng)
+  const M = buildM3D(W);
+  M.traverse(o=>{ if(o.isMesh) o.material = gold; });
+  M.rotation.x = -Math.PI/2;
+  M.position.z = enamelZ + enamelDepth + 0.05;
+  group.add(M);
+
+  // Canh camera nhìn trực diện
+  const box = new THREE.Box3().setFromObject(group);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  controls.target.copy(center);
+  camera.position.set(center.x, center.y + size.y*0.15, center.z + Math.max(size.x,size.y)*1.8);
+  camera.lookAt(center);
+}
+
+// Biên dạng khiên (điểm đã tinh chỉnh)
+function shieldShape2D(W=48){
+  // thiết kế gốc ~48mm bề ngang
+  const pts = [
+    [ 0,  24], [ 9.8, 21.5], [12.4, 14.8], [13.0, 6.0],
+    [10.0,-3.6], [ 7.0,-9.6], [ 0,-18.8],
+    [-7.0,-9.6],[-10.0,-3.6],[-13.0, 6.0],[-12.4,14.8],[-9.8,21.5],[0,24]
+  ];
+  const s = W/48;
+  const shape = new THREE.Shape();
+  shape.moveTo(pts[0][0]*s, pts[0][1]*s);
+  for(let i=1;i<pts.length;i++) shape.lineTo(pts[i][0]*s, pts[i][1]*s);
+  return shape;
+}
+
+// Chữ M nổi (khối hộp; khi có SVG chuẩn sẽ extrude SVG để khớp 100%)
+function buildM3D(W){
+  const h = W*0.44, w = W*0.40, t = Math.max(1.0, W*0.022);
+  const g = new THREE.Group();
+  const add = (geo, x=0, y=0, rot=0)=>{
+    const m = new THREE.Mesh(geo);
+    m.rotation.z = rot;
+    m.position.set(x,y,0);
+    g.add(m);
+  };
+  // thân giữa
+  add(new THREE.BoxGeometry(w*0.18, h, t));
+  // hai chân ngoài nghiêng
+  add(new THREE.BoxGeometry(w*0.22, h*0.98, t), -w*0.29, 0, 0.29);
+  add(new THREE.BoxGeometry(w*0.22, h*0.98, t),  w*0.29, 0,-0.29);
+  // hai “mũi” trên
+  add(new THREE.BoxGeometry(w*0.18, h*0.52, t), -w*0.18,  h*0.18, -0.24);
+  add(new THREE.BoxGeometry(w*0.18, h*0.52, t),  w*0.18,  h*0.18,  0.24);
+  // nhọn dưới
+  add(new THREE.BoxGeometry(w*0.18, h*0.35, t), 0, -h*0.30, 0);
+  return g;
+}
+</script>
+</body>
+</html>
